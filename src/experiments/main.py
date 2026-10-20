@@ -3,6 +3,29 @@ import numpy as np
 from doa_localization.doa_simulator import DOASimulator
 from doa_localization.doa_estimator import DOAEstimator
 
+from experiments.visual import plot_doa_3d
+
+def create_3d_microphone_array(
+    radius: float = 0.15,
+) -> np.ndarray:
+    directions = np.array([
+        [ 1,  1,  1, -1, -1,  1, -1, -1],
+        [ 1, -1,  1,  1, -1, -1,  1, -1],
+        [ 1, -1, -1, -1,  1,  1,  1, -1],
+    ], dtype=float)
+
+    directions /= np.linalg.norm(directions, axis=0)
+    return radius * directions
+
+
+def angular_error_deg(
+    estimated: float,
+    actual: float,
+) -> float:
+    difference = np.rad2deg(estimated - actual)
+    return abs((difference + 180) % 360 - 180)
+
+
 def main():
     fs = 16000
     duration = 2.0
@@ -11,46 +34,75 @@ def main():
     rng = np.random.default_rng(42)
     source_signal = rng.standard_normal(n_samples)
 
-    # 3. Create an 8-microphone circular array
-    angles = np.arange(8) * 2 * np.pi / 8
-
-    mic_positions = np.asarray([
-        0.15 * np.cos(angles),
-        0.15 * np.sin(angles),
-    ])
+    mic_positions = create_3d_microphone_array(radius=0.15)
 
     simulator = DOASimulator(
         mic_positions=mic_positions,
         fs=fs,
-        room_size=(10.0, 10.0),
-        max_order=100,
-    )
-
-    true_azimuth = np.deg2rad(191)
-
-    microphone_signals = simulator.simulate(
-        source_signal=source_signal,
-        source_azimuth=true_azimuth,
-        distance=2.0,
+        room_size=(10.0, 10.0, 10.0),
+        max_order=5,
     )
 
     estimator = DOAEstimator(
-        mic_positions = mic_positions,
-        fs = fs
+        mic_positions=mic_positions,
+        fs=fs,
+        nfft=512,
+        algorithm="MUSIC",
+        n_grids=600,
     )
 
-    estimated_azimuth = estimator.estimate(microphone_signals)
+    test_cases = [
+        (0, 0),
+        (45, 15),
+        (120, 30),
+        (225, -20),
+    ]
 
-    print(f"Microphone signals shape: {microphone_signals.shape}")
-    print(f"Number of microphones: {microphone_signals.shape[0]}")
-    print(f"Input samples: {n_samples}")
-    print(f"True direction: {np.rad2deg(true_azimuth):.1f} degrees")
-    print(f"Estimated direction: {np.rad2deg(estimated_azimuth):.1f} degrees")
+    visualization_results = []
 
-    error = abs(
-    (np.rad2deg(estimated_azimuth - true_azimuth) + 180) % 360 - 180
-)
+    for azimuth_deg, elevation_deg in test_cases:
+        true_azimuth = np.deg2rad(azimuth_deg)
+        true_elevation = np.deg2rad(elevation_deg)
 
-    print(f"Angular error: {error:.2f} degrees")
+        microphone_signals = simulator.simulate(
+            source_signal=source_signal,
+            source_azimuth=true_azimuth,
+            source_elevation=true_elevation,
+            distance=2.0,
+        )
+
+        estimated_azimuth, estimated_elevation = estimator.estimate(
+            microphone_signals
+        )
+
+        estimated_azimuth_deg = np.rad2deg(estimated_azimuth) % 360
+        estimated_elevation_deg = np.rad2deg(estimated_elevation)
+
+        azimuth_error = angular_error_deg(
+            estimated_azimuth,
+            true_azimuth,
+        )
+        elevation_error = abs(
+            estimated_elevation_deg - elevation_deg
+        )
+
+        print(
+            f"True: ({azimuth_deg:6.1f}°, {elevation_deg:6.1f}°) | "
+            f"Estimated: ({estimated_azimuth_deg:6.1f}°, "
+            f"{estimated_elevation_deg:6.1f}°) | "
+            f"Errors: ({azimuth_error:.1f}°, "
+            f"{elevation_error:.1f}°)"
+        )
+
+        visualization_results.append(
+            (
+                true_azimuth,
+                true_elevation,
+                estimated_azimuth,
+                estimated_elevation,
+            )
+        )
+
+    plot_doa_3d(mic_positions, visualization_results)
 
 main()
